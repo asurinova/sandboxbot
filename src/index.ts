@@ -68,6 +68,37 @@ function sleep(ms: number) {
         bot.sendMessage(msg.chat.id, "Сообщение отправлено");
     });
 
+    bot.onText(/\/profile (\d+)/, async (msg, match) => {
+        console.log(msg.chat.id);
+        console.log(process.env.BOT_GROUP_ID);
+        console.log(process.env.MY_ID!);
+
+        if (
+            msg.chat.id != Number(process.env.BOT_GROUP_ID!) &&
+            msg.chat.id != Number(process.env.MY_ID!)
+        ) {
+            console.log(msg.chat.id != Number(process.env.BOT_GROUP_ID!));
+            console.log(msg.chat.id != Number(process.env.MY_ID!));
+
+            return;
+        }
+
+        const db = dbConnection.db("bot");
+        const id = Number(match![1]);
+        const profile = (await db?.collection("users").findOne({
+            tgId: id,
+        })) as IUser;
+
+        if (!profile)
+            return bot.sendMessage(
+                msg.chat.id,
+                "Не удалось найти человека с таким Telegram ID"
+            );
+        let text = await getProfileText(id);
+        text += `\n💸 Баланс: ${profile.balance}`;
+        bot.sendMessage(msg.chat.id, text);
+    });
+
     bot.onText(/\/setbalance (\d+) (\d+)/, async (msg, match) => {
         if (msg.chat.id != Number(process.env.MY_ID!)) return;
 
@@ -106,14 +137,9 @@ function sleep(ms: number) {
     });
 
     bot.onText(/^[^\/]/, async (msg) => {
-        console.log(msg);
-
         if (msg.chat.type == "private") {
             const db = dbConnection.db("bot");
-            db?.collection("users")
-                .find({})
-                .toArray()
-                .then((a) => console.log(a));
+
             const res = (await db
                 ?.collection("users")
                 .findOne({ tgId: msg.chat.id })) as IUser;
@@ -356,14 +382,19 @@ function sleep(ms: number) {
                 showProfileInline(tgId, query.message?.message_id!);
                 break;
             case "getAccount":
-                bot.editMessageText("ожидайте получения аккаунта", {
+                if (!query.message?.chat.username)
+                    return bot.sendMessage(
+                        tgId,
+                        "Для получения заявки настройте username в настройках пользователя"
+                    );
+                bot.editMessageText("Заявка на получение аккаунта подана", {
                     chat_id: tgId,
                     message_id: query.message?.message_id,
                 });
                 showProfile(tgId);
                 const result = await bot.sendMessage(
                     process.env.MY_ID!,
-                    `@${query.message?.chat?.username} подал заявку на получение аккаунта`
+                    `@${query.message.chat.username} (${query.message?.chat?.id}) подал заявку на получение аккаунта`
                 );
                 bot.onReplyToMessage(
                     result.chat.id,
