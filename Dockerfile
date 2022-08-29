@@ -4,6 +4,7 @@ WORKDIR /usr/app
 
 COPY package.json ./
 
+RUN yarn global add pm2
 RUN yarn
 
 COPY . .

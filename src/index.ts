@@ -4,6 +4,9 @@ import { IUser } from "./modules/interfaces";
 import { rmSync, writeFileSync } from "fs";
 import { URL } from "url";
 
+// import dotenv from "dotenv";
+// dotenv.config();
+
 const dbConnection = new MongoConnection(process.env.DB_URL!);
 
 function sleep(ms: number) {
@@ -35,7 +38,7 @@ function sleep(ms: number) {
     }
 
     bot.onText(/\/start/, async (msg) => {
-        const db = dbConnection.db("bot");
+        const db = dbConnection.db("sandboxbot");
         const res = (await db
             ?.collection("users")
             .findOne({ tgId: msg.chat.id })) as IUser;
@@ -83,7 +86,7 @@ function sleep(ms: number) {
             return;
         }
 
-        const db = dbConnection.db("bot");
+        const db = dbConnection.db("sandboxbot");
         const id = Number(match![1]);
         const profile = (await db?.collection("users").findOne({
             tgId: id,
@@ -102,7 +105,7 @@ function sleep(ms: number) {
     bot.onText(/\/setbalance (\d+) (\d+)/, async (msg, match) => {
         if (msg.chat.id != Number(process.env.MY_ID!)) return;
 
-        const db = dbConnection.db("bot");
+        const db = dbConnection.db("sandboxbot");
         await db?.collection("users").updateOne(
             { tgId: Number(match![1]) },
             {
@@ -114,7 +117,7 @@ function sleep(ms: number) {
 
     bot.onText(/^\/members/, async (msg) => {
         if (msg.chat.id != Number(process.env.MY_ID!)) return;
-        const db = dbConnection.db("bot");
+        const db = dbConnection.db("sandboxbot");
 
         const all = (await db
             ?.collection("users")
@@ -124,9 +127,9 @@ function sleep(ms: number) {
             .toArray()) as IUser[];
         let text = "";
         all?.forEach((el, index) => {
-            text += `${index + 1}. ${el.lolzLink}, ${
-                el.tgId
-            }, ${el.activateDate?.toLocaleString("ru-RU")}`;
+            text += `${index + 1}. ${el.lolzLink}, ${el.tgId}, ${new Date(
+                el.activateDate!
+            ).toLocaleString("ru-RU")}`;
         });
 
         writeFileSync("members.txt", text);
@@ -138,7 +141,7 @@ function sleep(ms: number) {
 
     bot.onText(/^[^\/]/, async (msg) => {
         if (msg.chat.type == "private") {
-            const db = dbConnection.db("bot");
+            const db = dbConnection.db("sandboxbot");
 
             const res = (await db
                 ?.collection("users")
@@ -287,13 +290,16 @@ function sleep(ms: number) {
     });
 
     bot.on("callback_query", async (query) => {
-        const db = dbConnection.db("bot");
+        const db = dbConnection.db("sandboxbot");
         const data = JSON.parse(query.data!);
 
         console.log(query);
 
         if (query.message?.chat.id == process.env.BOT_GROUP_ID) {
             let newText = query.message?.text! + "\n\n";
+
+            let keyboard: TelegramBot.InlineKeyboardButton[][] = [[]];
+
             const date = new Date();
 
             switch (data.action) {
@@ -344,12 +350,64 @@ function sleep(ms: number) {
                         "ru-RU"
                     )}`;
                     break;
+                case "giveAccount":
+                    bot.sendMessage(
+                        data.tgId,
+                        "Ваш запрос на получение аккаунта успешно обработан"
+                    );
+                    newText += `Заявка была одобрена ${
+                        query.from.first_name
+                    } ${new Date().toLocaleString("ru-RU")}`;
+                    break;
+                case "notAccount":
+                    bot.sendMessage(
+                        data.tgId,
+                        "Ваш запрос на получение аккаунта отклонен"
+                    );
+                    newText += `Заявка была отклонена ${
+                        query.from.first_name
+                    } ${new Date().toLocaleString("ru-RU")}`;
+                    break;
+                case "processingAccount":
+                    bot.sendMessage(
+                        data.tgId,
+                        "Ваш запрос на получение аккаунта обрабатывается"
+                    );
+                    keyboard = [
+                        [
+                            {
+                                text: "Выдал аккаунт",
+                                callback_data: JSON.stringify({
+                                    action: "giveAccount",
+                                    tgId: data.tgId,
+                                }),
+                            },
+                            {
+                                text: "Отказал в выдаче",
+                                callback_data: JSON.stringify({
+                                    action: "notAccount",
+                                    tgId: data.tgId,
+                                }),
+                            },
+                        ],
+                    ];
+                    newText += `Заявка обрабатывается ${query.from.first_name}`;
+                    break;
             }
 
-            bot.editMessageText(newText, {
+            let newMessageData: TelegramBot.EditMessageTextOptions = {
                 message_id: query.message?.message_id,
                 chat_id: query.message?.chat.id,
-            });
+            };
+
+            if (keyboard[0].length > 0)
+                newMessageData = {
+                    ...newMessageData,
+                    reply_markup: {
+                        inline_keyboard: keyboard,
+                    },
+                };
+            bot.editMessageText(newText, newMessageData);
             return;
         }
 
@@ -392,18 +450,37 @@ function sleep(ms: number) {
                     message_id: query.message?.message_id,
                 });
                 showProfile(tgId);
-                const result = await bot.sendMessage(
-                    process.env.MY_ID!,
-                    `@${query.message.chat.username} (${query.message?.chat?.id}) подал заявку на получение аккаунта`
-                );
-                bot.onReplyToMessage(
-                    result.chat.id,
-                    result.message_id,
-                    async (msg) => {
-                        if (msg.text)
-                            bot.sendMessage(tgId, msg.text, {
-                                reply_to_message_id: query.message?.message_id,
-                            });
+                bot.sendMessage(
+                    process.env.BOT_GROUP_ID!,
+                    `@${query.message.chat.username} (${query.message?.chat?.id}) подал заявку на получение аккаунта`,
+                    {
+                        reply_markup: {
+                            inline_keyboard: [
+                                [
+                                    {
+                                        text: "Выдал аккаунт",
+                                        callback_data: JSON.stringify({
+                                            action: "giveAccount",
+                                            tgId: query.message.chat.id,
+                                        }),
+                                    },
+                                    {
+                                        text: "Отказал в выдаче",
+                                        callback_data: JSON.stringify({
+                                            action: "notAccount",
+                                            tgId: query.message.chat.id,
+                                        }),
+                                    },
+                                    {
+                                        text: "Обработка",
+                                        callback_data: JSON.stringify({
+                                            action: "processingAccount",
+                                            tgId: query.message.chat.id,
+                                        }),
+                                    },
+                                ],
+                            ],
+                        },
                     }
                 );
                 break;
@@ -604,14 +681,14 @@ const profileKeyboard = [
 ];
 
 async function getProfileText(tgId: number): Promise<string> {
-    const db = dbConnection.db("bot");
+    const db = dbConnection.db("sandboxbot");
     const res = (await db?.collection("users").findOne({ tgId })) as IUser;
     let text = "👤 Личный кабинет";
     text += `\n\n♻️ Профиль Lolzteam: ${res.lolzLink}`;
     text += `\n🆔 Telegram ID: ${tgId}`;
-    text += `\n🗓 Дата принятия в команду: ${res.activateDate?.toLocaleString(
-        "ru-RU"
-    )}`;
+    text += `\n🗓 Дата принятия в команду: ${new Date(
+        res.activateDate!
+    ).toLocaleString("ru-RU")}`;
     return text;
 }
 
