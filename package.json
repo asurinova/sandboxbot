@@ -5,6 +5,7 @@
   "license": "MIT",
   "scripts": {
     "start": "pm2-runtime start build/index.js",
+    "serve": "node build/index.js",
     "build": "tsc"
   },
   "devDependencies": {

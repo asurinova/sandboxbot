@@ -4,8 +4,8 @@ import { IUser } from "./modules/interfaces";
 import { rmSync, writeFileSync } from "fs";
 import { URL } from "url";
 
-// import dotenv from "dotenv";
-// dotenv.config();
+import dotenv from "dotenv";
+dotenv.config();
 
 const dbConnection = new MongoConnection(process.env.DB_URL!);
 
@@ -69,6 +69,41 @@ function sleep(ms: number) {
 
         await bot.sendMessage(match![1], match![2]);
         bot.sendMessage(msg.chat.id, "Сообщение отправлено");
+    });
+
+    bot.onText(/\/ban (\d+)/, async (msg, match) => {
+        if (msg.chat.id != Number(process.env.BOT_GROUP_ID!)) return;
+
+        const tgId = Number(match![1]);
+        if (Number.isNaN(tgId))
+            return bot.sendMessage(msg.chat.id, "Некорректный ид");
+
+        const db = dbConnection.db("sandboxbot");
+        const result = await db
+            ?.collection("users")
+            .updateOne({ tgId }, { $set: { activeState: "BANNED" } });
+        if (result?.modifiedCount == 0 || !result?.modifiedCount)
+            return bot.sendMessage(msg.chat.id, "Не удалось забанить");
+
+        bot.sendMessage(msg.chat.id, "Пользователь заблокирован");
+        bot.sendMessage(tgId, "Вам ограничен доступ к боту");
+    });
+
+    bot.onText(/\/unban (\d+)/, async (msg, match) => {
+        if (msg.chat.id != Number(process.env.BOT_GROUP_ID!)) return;
+
+        const tgId = Number(match![1]);
+        if (Number.isNaN(tgId))
+            return bot.sendMessage(msg.chat.id, "Некорректный ид");
+
+        const db = dbConnection.db("sandboxbot");
+        const result = await db
+            ?.collection("users")
+            .updateOne({ tgId }, { $set: { activeState: "ACTIVATED" } });
+        if (result?.modifiedCount == 0 || !result?.modifiedCount)
+            return bot.sendMessage(msg.chat.id, "Не удалось разбанить");
+
+        bot.sendMessage(msg.chat.id, "Пользователь разблокирован");
     });
 
     bot.onText(/\/profile (\d+)/, async (msg, match) => {
@@ -139,6 +174,29 @@ function sleep(ms: number) {
         rmSync("members.txt");
     });
 
+    bot.onText(/^\/a (.+)/, async (msg, match) => {
+        if (msg.chat.id != Number(process.env.MY_ID!)) return;
+        const db = dbConnection.db("sandboxbot");
+
+        const all = (await db
+            ?.collection("users")
+            .find({
+                activeState: { $in: ["ACTIVATED", "WAIT_ASK", "WITHDRAW_ASK"] },
+            })
+            .toArray()) as IUser[];
+
+        // let sleepTime = Date.now()
+        let counter = 0;
+        for (const user of all) {
+            bot.sendMessage(user.tgId, match![1]);
+            counter++;
+            if (counter == 25) {
+                counter = 0;
+                await sleep(2000);
+            }
+        }
+    });
+
     bot.onText(/^[^\/]/, async (msg) => {
         if (msg.chat.type == "private") {
             const db = dbConnection.db("sandboxbot");
@@ -146,6 +204,8 @@ function sleep(ms: number) {
             const res = (await db
                 ?.collection("users")
                 .findOne({ tgId: msg.chat.id })) as IUser;
+
+            if (res.activeState == "BANNED") return;
 
             if (res.activeState == "REG_NICK") {
                 try {
@@ -226,6 +286,7 @@ function sleep(ms: number) {
                 );
                 return;
             }
+
             if (res.activeState == "WAIT_ASK") {
                 db?.collection("users").updateOne(
                     { tgId: msg.chat.id },
@@ -255,6 +316,7 @@ function sleep(ms: number) {
                     }
                 );
             }
+
             if (res.activeState == "WITHDRAW_ASK") {
                 const res = (await db
                     ?.collection("users")
@@ -344,13 +406,21 @@ function sleep(ms: number) {
                     );
                     bot.sendMessage(
                         data.tgId,
-                        "вам был ограничен доступ к боту"
+                        "Вам был ограничен доступ к боту"
                     );
                     newText += `человек был забанен ${date.toLocaleString(
                         "ru-RU"
                     )}`;
                     break;
                 case "giveAccount":
+                    db?.collection("users").updateOne(
+                        { tgId: data.tgId },
+                        {
+                            $set: {
+                                waitForAccount: false,
+                            },
+                        }
+                    );
                     bot.sendMessage(
                         data.tgId,
                         "Ваш запрос на получение аккаунта успешно обработан"
@@ -360,6 +430,14 @@ function sleep(ms: number) {
                     } ${new Date().toLocaleString("ru-RU")}`;
                     break;
                 case "notAccount":
+                    db?.collection("users").updateOne(
+                        { tgId: data.tgId },
+                        {
+                            $set: {
+                                waitForAccount: false,
+                            },
+                        }
+                    );
                     bot.sendMessage(
                         data.tgId,
                         "Ваш запрос на получение аккаунта отклонен"
@@ -412,6 +490,9 @@ function sleep(ms: number) {
         }
 
         const tgId = query.message?.chat.id!;
+        const user = (await db?.collection("users").findOne({ tgId })) as IUser;
+        if (user.activeState == "BANNED") return;
+
         switch (data.action) {
             case "showInfo":
                 bot.editMessageText(
@@ -443,8 +524,28 @@ function sleep(ms: number) {
                 if (!query.message?.chat.username)
                     return bot.sendMessage(
                         tgId,
-                        "Для получения заявки настройте username в настройках пользователя"
+                        "Для подачи заявки настройте username в настройках пользователя"
                     );
+
+                if (user.waitForAccount) {
+                    await bot.editMessageText(
+                        "Вы уже подали заявку на получение аккаунта",
+                        {
+                            chat_id: tgId,
+                            message_id: query.message.message_id,
+                        }
+                    );
+                    showProfile(tgId);
+                    return;
+                }
+
+                db?.collection("users").updateOne(
+                    { tgId },
+                    {
+                        $set: { waitForAccount: true },
+                    }
+                );
+
                 bot.editMessageText("Заявка на получение аккаунта подана", {
                     chat_id: tgId,
                     message_id: query.message?.message_id,
@@ -483,13 +584,11 @@ function sleep(ms: number) {
                         },
                     }
                 );
+
                 break;
             case "balance":
-                const res = (await db
-                    ?.collection("users")
-                    .findOne({ tgId })) as IUser;
                 let keyboard: TelegramBot.InlineKeyboardButton[] = [];
-                if (res.balance! > 0)
+                if (user.balance! > 0)
                     keyboard = [
                         {
                             text: "Запросить выплату",
@@ -499,7 +598,7 @@ function sleep(ms: number) {
                         },
                     ];
                 keyboard = [...keyboard, gotoMain];
-                bot.editMessageText(`💸 Ваш баланс: ${res.balance} рублей`, {
+                bot.editMessageText(`💸 Ваш баланс: ${user.balance} рублей`, {
                     message_id: query.message?.message_id,
                     chat_id: query.message?.chat.id,
                     reply_markup: {

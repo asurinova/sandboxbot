@@ -15,4 +15,5 @@ export interface IUser extends WithId<Document> {
     activateDate?: Date;
     balance?: number;
     withdrawMethod?: "qiwi" | "yoomoney" | "card" | "crypto";
+    waitForAccount?: boolean;
 }
